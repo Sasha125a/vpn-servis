@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VPN Server для Render.com с WebSocket
+VPN Server для Render.com с поддержкой health check
 """
 
 import asyncio
@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
 import aiohttp
-from aiohttp import ClientSession, TCPConnector
+from aiohttp import web, ClientSession, TCPConnector
 import os
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -77,8 +77,8 @@ class VPNServer:
                 'success': False
             }
     
-    async def handle_client(self, websocket, path):
-        """Обработка подключения клиента через WebSocket"""
+    async def websocket_handler(self, websocket, path):
+        """Обработка WebSocket соединений"""
         client_address = websocket.remote_address
         logging.info(f"Новое WebSocket подключение от {client_address}")
         
@@ -149,19 +149,101 @@ class VPNServer:
         except Exception as e:
             logging.error(f"Ошибка соединения: {e}")
     
+    async def health_check(self, request):
+        """Обработчик health check запросов от Render.com"""
+        return web.Response(text="OK", status=200)
+    
+    async def index(self, request):
+        """Главная страница с информацией"""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>VPN WebSocket Server</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .container { max-width: 800px; margin: 0 auto; }
+                .status { padding: 10px; background: #e8f5e8; border-radius: 5px; }
+                .code { background: #f4f4f4; padding: 10px; border-radius: 5px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>VPN WebSocket Server</h1>
+                <div class="status">
+                    <p><strong>Статус:</strong> Сервер работает ✅</p>
+                    <p><strong>WebSocket Endpoint:</strong> wss://%s/ws</p>
+                    <p><strong>Health Check:</strong> <a href="/health">/health</a></p>
+                </div>
+                <h2>Пример использования:</h2>
+                <div class="code">
+                    <pre><code>
+import asyncio
+import websockets
+import json
+
+async def test_vpn():
+    async with websockets.connect('wss://%s/ws') as websocket:
+        # Ping запрос
+        await websocket.send(json.dumps({'command': 'ping'}))
+        response = await websocket.recv()
+        print(f"Ping response: {response}")
+        
+        # HTTP запрос
+        request = {
+            'command': 'http_request',
+            'method': 'GET',
+            'url': 'https://api.ipify.org?format=json'
+        }
+        await websocket.send(json.dumps(request))
+        response = await websocket.recv()
+        print(f"HTTP response: {response}")
+
+asyncio.run(test_vpn())
+                    </code></pre>
+                </div>
+            </div>
+        </body>
+        </html>
+        """ % (request.host, request.host)
+        return web.Response(text=html, content_type='text/html')
+    
     async def start(self):
-        """Запуск WebSocket сервера"""
-        port = int(os.getenv('PORT', 8080))
-        async with websockets.serve(
-            self.handle_client, 
-            "0.0.0.0", 
-            port,
+        """Запуск сервера с поддержкой HTTP и WebSocket"""
+        app = web.Application()
+        
+        # HTTP маршруты
+        app.router.add_get('/', self.index)
+        app.router.add_get('/health', self.health_check)
+        app.router.add_head('/health', self.health_check)  # Для HEAD запросов
+        
+        # Создаем WebSocket сервер
+        websocket_server = websockets.serve(
+            self.websocket_handler,
+            "0.0.0.0",
+            int(os.getenv('PORT', 8080)),
             ping_interval=30,
             ping_timeout=60
-        ):
-            logging.info(f"VPN WebSocket сервер запущен на порту {port}")
-            logging.info(f"Сервер доступен по адресу: wss://vpn-servis.onrender.com")
-            await asyncio.Future()  # Бесконечное ожидание
+        )
+        
+        # Запускаем WebSocket сервер
+        server = await websocket_server
+        
+        # Запускаем HTTP сервер
+        runner = web.AppRunner(app)
+        await runner.setup()
+        
+        # Используем тот же порт для HTTP и WebSocket
+        site = web.TCPSite(runner, "0.0.0.0", int(os.getenv('PORT', 8080)))
+        await site.start()
+        
+        logging.info(f"Сервер запущен на порту {os.getenv('PORT', 8080)}")
+        logging.info(f"HTTP: http://0.0.0.0:{os.getenv('PORT', 8080)}/")
+        logging.info(f"WebSocket: ws://0.0.0.0:{os.getenv('PORT', 8080)}/ws")
+        logging.info(f"Health check: http://0.0.0.0:{os.getenv('PORT', 8080)}/health")
+        
+        # Бесконечное ожидание
+        await asyncio.Future()
 
 if __name__ == "__main__":
     server = VPNServer()
