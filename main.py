@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-VPN Server с шифрованием трафика
-Запуск: python3 server.py
+VPN Server для Render.com с WebSocket
 """
 
-import socket
-import threading
+import asyncio
+import websockets
 import logging
+import json
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
+import aiohttp
+from aiohttp import ClientSession, TCPConnector
+import os
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class VPNServer:
-    def __init__(self, host='0.0.0.0', port=8888):
-        self.host = host
-        self.port = port
+    def __init__(self):
         self.clients = {}
         self.cipher_suite = None
         self.setup_encryption()
         
     def setup_encryption(self):
         """Настройка шифрования с использованием ключа"""
-        # В реальном приложении ключ должен храниться безопасно
         password = b"vpn_secret_password_123"
         salt = b"vpn_salt_12345678"
         
@@ -40,116 +40,129 @@ class VPNServer:
     
     def encrypt(self, data):
         """Шифрование данных"""
-        return self.cipher_suite.encrypt(data)
+        if isinstance(data, str):
+            data = data.encode()
+        return base64.b64encode(self.cipher_suite.encrypt(data)).decode()
     
-    def decrypt(self, data):
+    def decrypt(self, encrypted_data):
         """Расшифровка данных"""
-        return self.cipher_suite.decrypt(data)
-    
-    def handle_client(self, client_socket, client_address):
-        """Обработка подключения клиента"""
-        logging.info(f"Новое подключение от {client_address}")
-        
         try:
-            # Получаем и расшифровываем целевой адрес от клиента
-            target_info = client_socket.recv(1024)
-            if not target_info:
-                return
-                
-            target_info = self.decrypt(target_info)
-            target_host, target_port = target_info.decode().split(':')
-            target_port = int(target_port)
-            
-            logging.info(f"Клиент {client_address} запрашивает подключение к {target_host}:{target_port}")
-            
-            # Создаем соединение с целевым сервером
-            target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            target_socket.settimeout(10)
-            
-            try:
-                target_socket.connect((target_host, target_port))
-            except Exception as e:
-                logging.error(f"Не удалось подключиться к {target_host}:{target_port} - {e}")
-                client_socket.close()
-                return
-            
-            # Уведомляем клиент об успешном подключении
-            client_socket.send(self.encrypt(b"CONNECTED"))
-            
-            # Начинаем маршрутизацию трафика
-            self.route_traffic(client_socket, target_socket)
-            
+            data = base64.b64decode(encrypted_data)
+            return self.cipher_suite.decrypt(data)
+        except:
+            return b""
+    
+    async def handle_http_request(self, session, method, url, headers=None, data=None):
+        """Обработка HTTP запросов через VPN"""
+        try:
+            async with session.request(
+                method=method,
+                url=url,
+                headers=headers,
+                data=data,
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                response_data = await response.read()
+                return {
+                    'status': response.status,
+                    'headers': dict(response.headers),
+                    'body': base64.b64encode(response_data).decode(),
+                    'success': True
+                }
         except Exception as e:
-            logging.error(f"Ошибка обработки клиента {client_address}: {e}")
-        finally:
-            client_socket.close()
-            logging.info(f"Соединение с {client_address} закрыто")
+            logging.error(f"Ошибка HTTP запроса: {e}")
+            return {
+                'status': 500,
+                'body': base64.b64encode(str(e).encode()).decode(),
+                'success': False
+            }
     
-    def route_traffic(self, client_socket, target_socket):
-        """Маршрутизация трафика между клиентом и целевым сервером"""
-        import select
-        
-        while True:
-            try:
-                sockets = [client_socket, target_socket]
-                
-                # Используем select для мониторинга сокетов
-                readable, _, exceptional = select.select(sockets, [], sockets, 1)
-                
-                for sock in readable:
-                    if sock is client_socket:
-                        # Данные от клиента -> целевой сервер
-                        data = sock.recv(4096)
-                        if not data:
-                            return
-                        try:
-                            decrypted_data = self.decrypt(data)
-                            target_socket.send(decrypted_data)
-                        except:
-                            continue
-                            
-                    elif sock is target_socket:
-                        # Данные от целевого сервера -> клиент
-                        data = sock.recv(4096)
-                        if not data:
-                            return
-                        encrypted_data = self.encrypt(data)
-                        client_socket.send(encrypted_data)
-                
-                for sock in exceptional:
-                    return
-                    
-            except (socket.error, OSError) as e:
-                logging.error(f"Ошибка маршрутизации: {e}")
-                break
-            except Exception as e:
-                logging.error(f"Неожиданная ошибка: {e}")
-                break
-    
-    def start(self):
-        """Запуск VPN сервера"""
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind((self.host, self.port))
-        server_socket.listen(5)
-        
-        logging.info(f"VPN сервер запущен на {self.host}:{self.port}")
-        logging.info("Ожидание подключений...")
+    async def handle_client(self, websocket, path):
+        """Обработка подключения клиента через WebSocket"""
+        client_address = websocket.remote_address
+        logging.info(f"Новое WebSocket подключение от {client_address}")
         
         try:
-            while True:
-                client_socket, client_address = server_socket.accept()
-                client_thread = threading.Thread(
-                    target=self.handle_client,
-                    args=(client_socket, client_address)
-                )
-                client_thread.daemon = True
-                client_thread.start()
-        except KeyboardInterrupt:
-            logging.info("Остановка сервера...")
-        finally:
-            server_socket.close()
+            async with ClientSession(connector=TCPConnector(ssl=False)) as session:
+                async for message in websocket:
+                    try:
+                        data = json.loads(message)
+                        command = data.get('command')
+                        
+                        if command == 'http_request':
+                            # Обработка HTTP запроса
+                            url = data['url']
+                            method = data.get('method', 'GET')
+                            headers = data.get('headers', {})
+                            body_data = data.get('body')
+                            
+                            # Проверяем и декодируем тело если есть
+                            if body_data:
+                                try:
+                                    body_data = base64.b64decode(body_data)
+                                except:
+                                    body_data = body_data.encode() if isinstance(body_data, str) else body_data
+                            
+                            logging.info(f"HTTP запрос: {method} {url}")
+                            
+                            response = await self.handle_http_request(
+                                session, method, url, headers, body_data
+                            )
+                            
+                            # Отправляем зашифрованный ответ
+                            encrypted_response = self.encrypt(json.dumps(response))
+                            await websocket.send(json.dumps({
+                                'type': 'http_response',
+                                'data': encrypted_response
+                            }))
+                            
+                        elif command == 'ping':
+                            # Проверка соединения
+                            await websocket.send(json.dumps({
+                                'type': 'pong',
+                                'data': self.encrypt('pong')
+                            }))
+                            
+                        elif command == 'test':
+                            # Тестовый запрос
+                            test_url = "http://httpbin.org/get"
+                            response = await self.handle_http_request(session, 'GET', test_url)
+                            encrypted_response = self.encrypt(json.dumps(response))
+                            await websocket.send(json.dumps({
+                                'type': 'test_response',
+                                'data': encrypted_response
+                            }))
+                            
+                    except json.JSONDecodeError:
+                        logging.error("Неверный формат JSON")
+                        await websocket.send(json.dumps({
+                            'error': 'Invalid JSON format'
+                        }))
+                    except Exception as e:
+                        logging.error(f"Ошибка обработки сообщения: {e}")
+                        await websocket.send(json.dumps({
+                            'error': str(e)
+                        }))
+                        
+        except websockets.exceptions.ConnectionClosed:
+            logging.info(f"Соединение с {client_address} закрыто")
+        except Exception as e:
+            logging.error(f"Ошибка соединения: {e}")
+    
+    async def start(self):
+        """Запуск WebSocket сервера"""
+        port = int(os.getenv('PORT', 8080))
+        async with websockets.serve(
+            self.handle_client, 
+            "0.0.0.0", 
+            port,
+            ping_interval=30,
+            ping_timeout=60
+        ):
+            logging.info(f"VPN WebSocket сервер запущен на порту {port}")
+            logging.info(f"Сервер доступен по адресу: wss://vpn-servis.onrender.com")
+            await asyncio.Future()  # Бесконечное ожидание
 
 if __name__ == "__main__":
     server = VPNServer()
-    server.start()
+    asyncio.run(server.start())
