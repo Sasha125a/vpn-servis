@@ -137,6 +137,16 @@ class VPNServer:
                                     'data': encrypted_response
                                 })
                                 
+                            elif command == 'get_ip':
+                                # Получение IP адреса
+                                ip_url = "https://api.ipify.org?format=json"
+                                response = await self.handle_http_request(session, 'GET', ip_url)
+                                encrypted_response = self.encrypt(json.dumps(response))
+                                await ws.send_json({
+                                    'type': 'ip_response',
+                                    'data': encrypted_response
+                                })
+                                
                         except json.JSONDecodeError:
                             logging.error("Неверный формат JSON")
                             await ws.send_json({
@@ -164,188 +174,384 @@ class VPNServer:
     async def index(self, request):
         """Главная страница с информацией"""
         host = request.host
+        # Определяем протокол для WebSocket
+        ws_protocol = 'wss' if 'onrender.com' in host else 'ws'
+        
         html = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <title>VPN WebSocket Server</title>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
-                .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-                .status {{ padding: 15px; background: #e8f5e8; border-radius: 5px; margin-bottom: 20px; }}
-                .code {{ background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }}
-                h1 {{ color: #333; }}
-                .btn {{ display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; margin: 10px 0; }}
-                .btn:hover {{ background: #0056b3; }}
+                * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+                body {{ 
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                    line-height: 1.6; 
+                    color: #333; 
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
+                    padding: 20px;
+                }}
+                .container {{ 
+                    max-width: 1200px; 
+                    margin: 0 auto; 
+                    background: white; 
+                    padding: 40px; 
+                    border-radius: 20px; 
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                }}
+                header {{ 
+                    text-align: center; 
+                    margin-bottom: 40px;
+                    padding-bottom: 20px;
+                    border-bottom: 3px solid #f0f0f0;
+                }}
+                h1 {{ 
+                    color: #2c3e50; 
+                    font-size: 2.8rem;
+                    margin-bottom: 10px;
+                    background: linear-gradient(45deg, #667eea, #764ba2);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                }}
+                .subtitle {{ 
+                    color: #7f8c8d; 
+                    font-size: 1.2rem;
+                    margin-bottom: 30px;
+                }}
+                .status-card {{
+                    background: #f8f9fa;
+                    padding: 25px;
+                    border-radius: 15px;
+                    margin-bottom: 30px;
+                    border-left: 5px solid #28a745;
+                }}
+                .endpoints {{
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                    gap: 20px;
+                    margin-bottom: 40px;
+                }}
+                .endpoint-card {{
+                    background: #fff;
+                    padding: 25px;
+                    border-radius: 15px;
+                    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+                    border: 2px solid #e9ecef;
+                    transition: transform 0.3s, box-shadow 0.3s;
+                }}
+                .endpoint-card:hover {{
+                    transform: translateY(-5px);
+                    box-shadow: 0 15px 30px rgba(0,0,0,0.2);
+                }}
+                .endpoint-card h3 {{
+                    color: #2c3e50;
+                    margin-bottom: 15px;
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                }}
+                .endpoint-card h3 i {{
+                    font-size: 1.5em;
+                }}
+                .code-block {{
+                    background: #2c3e50;
+                    color: #ecf0f1;
+                    padding: 20px;
+                    border-radius: 10px;
+                    overflow-x: auto;
+                    margin: 20px 0;
+                    font-family: 'Courier New', monospace;
+                }}
+                .btn {{
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 10px;
+                    padding: 12px 30px;
+                    background: linear-gradient(45deg, #667eea, #764ba2);
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 50px;
+                    font-weight: bold;
+                    border: none;
+                    cursor: pointer;
+                    transition: all 0.3s;
+                    margin: 10px 5px;
+                }}
+                .btn:hover {{
+                    transform: scale(1.05);
+                    box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+                }}
+                .btn-test {{
+                    background: linear-gradient(45deg, #28a745, #20c997);
+                }}
+                .test-section {{
+                    background: #f8f9fa;
+                    padding: 30px;
+                    border-radius: 15px;
+                    margin-top: 40px;
+                }}
+                .test-output {{
+                    background: #2c3e50;
+                    color: #ecf0f1;
+                    padding: 20px;
+                    border-radius: 10px;
+                    min-height: 200px;
+                    margin-top: 20px;
+                    overflow-y: auto;
+                    font-family: 'Courier New', monospace;
+                    white-space: pre-wrap;
+                }}
+                .log-entry {{
+                    padding: 5px 0;
+                    border-bottom: 1px solid rgba(255,255,255,0.1);
+                }}
+                .log-success {{ color: #28a745; }}
+                .log-error {{ color: #dc3545; }}
+                .log-info {{ color: #17a2b8; }}
+                footer {{
+                    text-align: center;
+                    margin-top: 40px;
+                    padding-top: 20px;
+                    border-top: 2px solid #f0f0f0;
+                    color: #7f8c8d;
+                }}
+                @media (max-width: 768px) {{
+                    .container {{ padding: 20px; }}
+                    h1 {{ font-size: 2rem; }}
+                    .endpoints {{ grid-template-columns: 1fr; }}
+                }}
             </style>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         </head>
         <body>
             <div class="container">
-                <h1>🚀 VPN WebSocket Server</h1>
-                <div class="status">
-                    <p><strong>Статус:</strong> Сервер работает ✅</p>
-                    <p><strong>WebSocket Endpoint:</strong> <code>ws://{host}/ws</code></p>
-                    <p><strong>Health Check:</strong> <a href="/health">/health</a></p>
+                <header>
+                    <h1><i class="fas fa-shield-alt"></i> VPN WebSocket Server</h1>
+                    <p class="subtitle">Безопасный доступ к интернету через зашифрованный WebSocket туннель</p>
+                </header>
+                
+                <div class="status-card">
+                    <h2><i class="fas fa-check-circle"></i> Статус системы</h2>
+                    <p><strong>Статус:</strong> <span style="color: #28a745;">Сервер работает ✅</span></p>
+                    <p><strong>WebSocket Endpoint:</strong> <code>{ws_protocol}://{host}/ws</code></p>
+                    <p><strong>Health Check:</strong> <a href="/health" style="color: #667eea;">{host}/health</a></p>
                 </div>
                 
-                <h2>📡 Тестирование</h2>
-                <a class="btn" href="/test">Тест соединения</a>
+                <div class="endpoints">
+                    <div class="endpoint-card">
+                        <h3><i class="fas fa-globe"></i> WebSocket</h3>
+                        <p>Основной endpoint для VPN соединения:</p>
+                        <div class="code-block">
+                            {ws_protocol}://{host}/ws
+                        </div>
+                        <button class="btn" onclick="testWebSocket()">
+                            <i class="fas fa-plug"></i> Тест соединения
+                        </button>
+                    </div>
+                    
+                    <div class="endpoint-card">
+                        <h3><i class="fas fa-heartbeat"></i> Health Check</h3>
+                        <p>Проверка работоспособности сервера:</p>
+                        <div class="code-block">
+                            GET {host}/health
+                        </div>
+                        <a href="/health" class="btn btn-test">
+                            <i class="fas fa-stethoscope"></i> Проверить
+                        </a>
+                    </div>
+                    
+                    <div class="endpoint-card">
+                        <h3><i class="fas fa-code"></i> API Документация</h3>
+                        <p>Доступные команды WebSocket API:</p>
+                        <ul style="margin-left: 20px; margin-top: 10px;">
+                            <li><code>{{"command": "ping"}}</code> - проверка связи</li>
+                            <li><code>{{"command": "get_ip"}}</code> - получить IP</li>
+                            <li><code>{{"command": "http_request", ...}}</code> - HTTP запрос</li>
+                        </ul>
+                    </div>
+                </div>
                 
-                <h2>📚 Примеры использования</h2>
-                <div class="code">
-                    <h3>Python клиент:</h3>
-                    <pre><code>
+                <div class="test-section">
+                    <h2><i class="fas fa-vial"></i> Тестирование в реальном времени</h2>
+                    <p>Проверьте работоспособность VPN соединения:</p>
+                    
+                    <div style="margin: 20px 0;">
+                        <button class="btn" onclick="sendCommand('ping')">
+                            <i class="fas fa-satellite-dish"></i> Ping сервер
+                        </button>
+                        <button class="btn" onclick="sendCommand('get_ip')">
+                            <i class="fas fa-map-marker-alt"></i> Получить IP
+                        </button>
+                        <button class="btn" onclick="sendCommand('http_request', 'https://httpbin.org/get')">
+                            <i class="fas fa-external-link-alt"></i> Тест HTTP
+                        </button>
+                    </div>
+                    
+                    <div class="test-output" id="output">
+                        <div class="log-entry log-info">Готов к тестированию... Нажмите любую кнопку выше</div>
+                    </div>
+                </div>
+                
+                <h2 style="margin-top: 40px;"><i class="fas fa-laptop-code"></i> Примеры кода</h2>
+                
+                <div class="code-block">
+// Python клиент
 import asyncio
 import websockets
 import json
 
 async def test_vpn():
-    async with websockets.connect('ws://{host}/ws') as websocket:
-        # Ping запрос
-        await websocket.send(json.dumps({{'command': 'ping'}}))
-        response = await websocket.recv()
-        print(f"Ping response: {{response}}")
+    async with websockets.connect('{ws_protocol}://{host}/ws') as ws:
+        # Ping
+        await ws.send(json.dumps({{'command': 'ping'}}))
+        response = await ws.recv()
+        print(f"Ping: {{response}}")
         
-        # HTTP запрос через VPN
+        # Получить IP
         request = {{
             'command': 'http_request',
             'method': 'GET',
             'url': 'https://api.ipify.org?format=json'
         }}
-        await websocket.send(json.dumps(request))
-        response = await websocket.recv()
-        print(f"HTTP response: {{response}}")
+        await ws.send(json.dumps(request))
+        response = await ws.recv()
+        print(f"IP Response: {{response}}")
 
 asyncio.run(test_vpn())
-                    </code></pre>
-                    
-                    <h3>JavaScript клиент:</h3>
-                    <pre><code>
-const ws = new WebSocket('ws://{host}/ws');
+                </div>
+                
+                <div class="code-block" style="margin-top: 20px;">
+// JavaScript клиент
+const ws = new WebSocket('{ws_protocol}://{host}/ws');
 
 ws.onopen = () => {{
-    console.log('Connected to VPN server');
+    console.log('Connected to VPN');
     
-    // Send ping
+    // Отправка ping
     ws.send(JSON.stringify({{command: 'ping'}}));
 }};
 
 ws.onmessage = (event) => {{
-    console.log('Response:', event.data);
+    console.log('Response:', JSON.parse(event.data));
 }};
-                    </code></pre>
                 </div>
                 
-                <h2>🔧 API Endpoints</h2>
-                <ul>
-                    <li><code>GET /</code> - Эта страница</li>
-                    <li><code>GET /health</code> - Health check</li>
-                    <li><code>GET /test</code> - Тест соединения</li>
-                    <li><code>GET /ws</code> - WebSocket endpoint</li>
-                </ul>
+                <footer>
+                    <p>VPN WebSocket Server | Защищенное соединение | v1.0</p>
+                    <p style="margin-top: 10px; font-size: 0.9em;">
+                        <i class="fas fa-lock"></i> Все данные шифруются с помощью Fernet (AES-128)
+                    </p>
+                </footer>
             </div>
-        </body>
-        </html>
-        """
-        return web.Response(text=html, content_type='text/html')
-    
-    async def test_page(self, request):
-        """Страница для тестирования WebSocket"""
-        host = request.host
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Тест VPN соединения</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; }}
-                .container {{ max-width: 800px; margin: 0 auto; }}
-                .status {{ padding: 10px; margin: 10px 0; border-radius: 5px; }}
-                .success {{ background: #d4edda; color: #155724; }}
-                .error {{ background: #f8d7da; color: #721c24; }}
-                .btn {{ padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }}
-                .btn:hover {{ background: #218838; }}
-                #output {{ background: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px; white-space: pre-wrap; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🔍 Тест VPN соединения</h1>
-                <button class="btn" onclick="testConnection()">Тестировать соединение</button>
-                <button class="btn" onclick="getIP()">Получить IP через VPN</button>
+            
+            <script>
+                let websocket = null;
+                const output = document.getElementById('output');
                 
-                <div id="output"></div>
+                function addLog(message, type = 'info') {{
+                    const entry = document.createElement('div');
+                    entry.className = `log-entry log-${{type}}`;
+                    entry.innerHTML = `[${new Date().toLocaleTimeString()}] ${{message}}`;
+                    output.appendChild(entry);
+                    output.scrollTop = output.scrollHeight;
+                }}
                 
-                <script>
-                    let ws = null;
-                    const output = document.getElementById('output');
-                    
-                    function log(message, type = 'info') {{
-                        const status = document.createElement('div');
-                        status.className = 'status ' + type;
-                        status.textContent = message;
-                        output.prepend(status);
+                function connectWebSocket() {{
+                    if (websocket && websocket.readyState === WebSocket.OPEN) {{
+                        return websocket;
                     }}
                     
-                    function connectWebSocket() {{
-                        if (ws && ws.readyState === WebSocket.OPEN) return ws;
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${{protocol}}//${{window.location.host}}/ws`;
+                    
+                    addLog(`Подключаюсь к ${{wsUrl}}...`, 'info');
+                    
+                    websocket = new WebSocket(wsUrl);
+                    
+                    websocket.onopen = () => {{
+                        addLog('✅ WebSocket подключение установлено', 'success');
+                    }};
+                    
+                    websocket.onmessage = (event) => {{
+                        try {{
+                            const data = JSON.parse(event.data);
+                            addLog(`📥 Ответ: ${{JSON.stringify(data, null, 2)}}`, 'info');
+                        }} catch (e) {{
+                            addLog(`📥 Ответ: ${{event.data}}`, 'info');
+                        }}
+                    }};
+                    
+                    websocket.onerror = (error) => {{
+                        addLog(`❌ WebSocket ошибка: ${{error}}`, 'error');
+                    }};
+                    
+                    websocket.onclose = () => {{
+                        addLog('🔌 Соединение закрыто', 'info');
+                    }};
+                    
+                    return websocket;
+                }}
+                
+                function sendCommand(command, url = null) {{
+                    try {{
+                        const ws = connectWebSocket();
                         
-                        ws = new WebSocket('ws://{host}/ws');
-                        
-                        ws.onopen = () => {{
-                            log('✅ WebSocket подключение установлено', 'success');
-                        }};
-                        
-                        ws.onmessage = (event) => {{
-                            try {{
-                                const data = JSON.parse(event.data);
-                                log('📥 Получен ответ: ' + JSON.stringify(data, null, 2));
-                            }} catch (e) {{
-                                log('📥 Получен ответ: ' + event.data);
+                        // Даем время на подключение
+                        setTimeout(() => {{
+                            if (ws.readyState === WebSocket.OPEN) {{
+                                let message;
+                                
+                                if (command === 'http_request' && url) {{
+                                    message = {{
+                                        command: 'http_request',
+                                        method: 'GET',
+                                        url: url
+                                    }};
+                                    addLog(`📤 Отправка HTTP запроса: ${{url}}`, 'info');
+                                }} else if (command === 'get_ip') {{
+                                    message = {{
+                                        command: 'get_ip'
+                                    }};
+                                    addLog('📤 Запрос IP адреса...', 'info');
+                                }} else {{
+                                    message = {{ command: command }};
+                                    addLog(`📤 Отправка команды: ${{command}}`, 'info');
+                                }}
+                                
+                                ws.send(JSON.stringify(message));
+                            }} else {{
+                                addLog('❌ WebSocket не подключен. Пожалуйста, подождите...', 'error');
                             }}
-                        }};
+                        }}, 500);
                         
-                        ws.onerror = (error) => {{
-                            log('❌ WebSocket ошибка: ' + error, 'error');
-                        }};
-                        
-                        ws.onclose = () => {{
-                            log('🔌 WebSocket соединение закрыто');
-                        }};
-                        
-                        return ws;
+                    }} catch (error) {{
+                        addLog(`❌ Ошибка: ${{error}}`, 'error');
                     }}
+                }}
+                
+                function testWebSocket() {{
+                    addLog('🧪 Запуск теста WebSocket соединения...', 'info');
+                    sendCommand('ping');
                     
-                    function testConnection() {{
-                        try {{
-                            const ws = connectWebSocket();
-                            setTimeout(() => {{
-                                ws.send(JSON.stringify({{command: 'ping'}}));
-                                log('📤 Отправлен ping запрос');
-                            }}, 1000);
-                        }} catch (e) {{
-                            log('❌ Ошибка: ' + e, 'error');
-                        }}
-                    }}
+                    setTimeout(() => {{
+                        sendCommand('get_ip');
+                    }}, 1000);
                     
-                    function getIP() {{
-                        try {{
-                            const ws = connectWebSocket();
-                            setTimeout(() => {{
-                                const request = {{
-                                    command: 'http_request',
-                                    method: 'GET',
-                                    url: 'https://api.ipify.org?format=json'
-                                }};
-                                ws.send(JSON.stringify(request));
-                                log('📤 Отправлен запрос IP адреса');
-                            }}, 1000);
-                        }} catch (e) {{
-                            log('❌ Ошибка: ' + e, 'error');
-                        }}
-                    }}
-                </script>
-            </div>
+                    setTimeout(() => {{
+                        sendCommand('http_request', 'https://httpbin.org/get');
+                    }}, 2000);
+                }}
+                
+                // Автоматическое подключение при загрузке страницы
+                window.addEventListener('load', () => {{
+                    setTimeout(() => {{
+                        connectWebSocket();
+                    }}, 1000);
+                }});
+            </script>
         </body>
         </html>
         """
@@ -358,8 +564,9 @@ ws.onmessage = (event) => {{
         # HTTP маршруты
         app.router.add_get('/', self.index)
         app.router.add_get('/health', self.health_check)
-        app.router.add_head('/health', self.health_check)  # Для HEAD запросов
-        app.router.add_get('/test', self.test_page)
+        # Убрали явную регистрацию HEAD, aiohttp делает это автоматически
+        
+        # WebSocket маршрут
         app.router.add_get('/ws', self.websocket_handler)
         
         # Получаем порт из переменной окружения Render
@@ -372,11 +579,14 @@ ws.onmessage = (event) => {{
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
         
-        logging.info(f"🚀 Сервер запущен на порту {port}")
+        logging.info(f"🚀 VPN сервер запущен!")
+        logging.info(f"📡 Порт: {port}")
         logging.info(f"🌐 HTTP: http://0.0.0.0:{port}/")
         logging.info(f"🔌 WebSocket: ws://0.0.0.0:{port}/ws")
         logging.info(f"🏥 Health check: http://0.0.0.0:{port}/health")
-        logging.info(f"🛠️  Тест страница: http://0.0.0.0:{port}/test")
+        logging.info("=" * 50)
+        logging.info("✅ Сервер готов к работе")
+        logging.info("=" * 50)
         
         # Бесконечное ожидание
         await asyncio.Future()
@@ -387,9 +597,11 @@ def main():
     try:
         asyncio.run(server.start_server())
     except KeyboardInterrupt:
-        logging.info("Сервер остановлен")
+        logging.info("\n🛑 Сервер остановлен пользователем")
     except Exception as e:
-        logging.error(f"Ошибка запуска сервера: {e}")
+        logging.error(f"❌ Критическая ошибка запуска сервера: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
