@@ -215,7 +215,6 @@ asyncio.run(test_vpn())
         # HTTP маршруты
         app.router.add_get('/', self.index)
         app.router.add_get('/health', self.health_check)
-        app.router.add_head('/health', self.health_check)  # Для HEAD запросов
         
         # Создаем WebSocket сервер
         websocket_server = websockets.serve(
