@@ -6,13 +6,11 @@ VPN Server с шифрованием трафика
 
 import socket
 import threading
-import ssl
 import logging
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
-import os
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -30,7 +28,7 @@ class VPNServer:
         password = b"vpn_secret_password_123"
         salt = b"vpn_salt_12345678"
         
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
@@ -89,12 +87,13 @@ class VPNServer:
     
     def route_traffic(self, client_socket, target_socket):
         """Маршрутизация трафика между клиентом и целевым сервером"""
-        sockets = [client_socket, target_socket]
+        import select
         
         while True:
             try:
+                sockets = [client_socket, target_socket]
+                
                 # Используем select для мониторинга сокетов
-                import select
                 readable, _, exceptional = select.select(sockets, [], sockets, 1)
                 
                 for sock in readable:
@@ -120,8 +119,11 @@ class VPNServer:
                 for sock in exceptional:
                     return
                     
-            except Exception as e:
+            except (socket.error, OSError) as e:
                 logging.error(f"Ошибка маршрутизации: {e}")
+                break
+            except Exception as e:
+                logging.error(f"Неожиданная ошибка: {e}")
                 break
     
     def start(self):
